@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Moonlight Fruit Ninja</title>
+
+<style>
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
+  background: #080b12;
+  color: white;
+  font-family: Arial, sans-serif;
+  touch-action: none;
+}
+
+canvas {
+  width: 100vw;
+  height: 100vh;
+  display: block;
+  touch-action: none;
+}
+
+.hud {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  right: 12px;
+  display: flex;
+  justify-content: space-between;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.pill {
+  background: #050812cc;
+  border: 1px solid #ffffff35;
+  border-radius: 13px;
+  padding: 10px;
+  font-weight: bold;
+}
+
+#overlay {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: #0009;
+  z-index: 3;
+}
+
+.panel {
+  width: 90%;
+  max-width: 420px;
+  padding: 28px 20px;
+  text-align: center;
+  background: #090e1bee;
+  border: 1px solid #ffffff40;
+  border-radius: 22px;
+}
+
+h1 {
+  font-size: 32px;
+}
+
+p {
+  color: #d6dbea;
+  line-height: 1.5;
+}
+
+button {
+  padding: 14px 28px;
+  border: none;
+  border-radius: 30px;
+  background: #ffd166;
+  color: #151827;
+  font-size: 17px;
+  font-weight: bold;
+}
+
+.small {
+  font-size: 12px;
+  margin-top: 15px;
+}
+</style>
+</head>
+
+<body>
+
+<canvas id="game"></canvas>
+
+<div class="hud">
+  <div class="pill">🍉 Score: <span id="score">0</span></div>
+  <div class="pill">❤️ Miss: <span id="miss">0</span>/3</div>
+  <div class="pill">🏆 Best: <span id="best">0</span></div>
+</div>
+
+<div id="overlay">
+  <div class="panel">
+    <h1 id="heading">MOONLIGHT<br>FRUIT NINJA</h1>
+
+    <p id="message">
+      EXTREME HARD MODE!
+      Slice fruits and avoid bombs.
+      Don't miss 3 fruits!
+    </p>
+
+    <button id="start">START HARD MODE</button>
+
+    <div class="small">
+      Swipe fast • Avoid 💣 bombs
+    </div>
+  </div>
+</div>
+
+<script>
+
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+const scoreEl = document.getElementById("score");
+const missEl = document.getElementById("miss");
+const bestEl = document.getElementById("best");
+
+const overlay = document.getElementById("overlay");
+const heading = document.getElementById("heading");
+const message = document.getElementById("message");
+const startBtn = document.getElementById("start");
+
+const bg = new Image();
+bg.src = "moon-city.png";
+
+let W, H, dpr;
+
+let items = [];
+let particles = [];
+let trail = [];
+
+let score = 0;
+let miss = 0;
+let best = Number(localStorage.getItem("moonFruitBest") || 0);
+
+let running = false;
+let lastSpawn = 0;
+let lastTime = 0;
+let animation;
+let down = false;
+let bombFlash = 0;
+
+bestEl.textContent = best;
+
+const fruits = [
+  "🍉","🍊","🍎","🍍",
+  "🥝","🍓","🍋","🍑","🥥"
+];
+
+// RESIZE
+
+function resize() {
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  W = innerWidth;
+  H = innerHeight;
+
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+window.addEventListener("resize", resize);
+resize();
+
+// BACKGROUND
+
+function background() {
+
+  if (bg.complete && bg.naturalWidth) {
+
+    const s = Math.max(
+      W / bg.naturalWidth,
+      H / bg.naturalHeight
+    );
+
+    const sw = W / s;
+    const sh = H / s;
+
+    ctx.drawImage(
+      bg,
+      (bg.naturalWidth - sw) / 2,
+      (bg.naturalHeight - sh) / 2,
+      sw,
+      sh,
+      0,
+      0,
+      W,
+      H
+    );
+
+  } else {
+
+    let g = ctx.createLinearGradient(0,0,0,H);
+
+    g.addColorStop(0,"#111827");
+    g.addColorStop(1,"#263047");
+
+    ctx.fillStyle = g;
+    ctx.fillRect(0,0,W,H);
+  }
+
+  ctx.fillStyle = "rgba(1,4,12,.43)";
+  ctx.fillRect(0,0,W,H);
+}
+
+// SPAWN FRUITS
+
+function spawn() {
+
+  const r = Math.max(24, Math.min(34,W*.07));
+
+  const bomb = Math.random() <
+    (0.18 + Math.min(score*.002,0.12));
+
+  items.push({
+
+    x: r + Math.random()*(W-r*2),
+    y: H+r,
+
+    vx: (Math.random()-.5)*5.5,
+
+    vy: -(13 + Math.random()*5 +
+      Math.min(score*.035,4)),
+
+    g: .29,
+    r,
+
+    emoji: bomb ? "💣" :
+      fruits[Math.floor(Math.random()*fruits.length)],
+
+    bomb,
+    cut: false,
+    missed: false
+  });
+}
+
+// PARTICLES
+
+function burst(x,y,bomb=false) {
+
+  const colors = bomb
+    ? ["#ff4141","#ff9f1c","#777"]
+    : ["#ffe066","#ff6b6b","#7ee081","#7bdff2","#cdb4ff"];
+
+  for(let i=0;i<16;i++) {
+
+    let a = Math.random()*Math.PI*2;
+    let s = 2+Math.random()*5;
+
+    particles.push({
+
+      x,y,
+
+      vx: Math.cos(a)*s,
+      vy: Math.sin(a)*s,
+
+      life: 25+Math.random()*18,
+      size: 2+Math.random()*4,
+
+      color: colors[
+        Math.floor(Math.random()*colors.length)
+      ]
+    });
+  }
+}
+
+// TOUCH AND MOUSE
+
+function getPos(e) {
+
+  const r = canvas.getBoundingClientRect();
+
+  return {
+    x: e.clientX-r.left,
+    y: e.clientY-r.top,
+    t: performance.now()
+  };
+}
+
+function pointerStart(e) {
+
+  down = true;
+
+  try {
+    canvas.setPointerCapture(e.pointerId);
+  } catch(err) {}
+
+  trail = [getPos(e)];
+}
+
+function pointerMove(e) {
+
+  if(!down || !running) return;
+
+  const p = getPos(e);
+
+  trail.push(p);
+
+  if(trail.length>10) {
+    trail.shift();
+  }
+
+  for(const it of items) {
+
+    if(it.cut) continue;
+
+    if(Math.hypot(p.x-it.x,p.y-it.y) > it.r+19)
+      continue;
+
+    it.cut = true;
+
+    burst(it.x,it.y,it.bomb);
+
+    if(it.bomb) {
+
+      score = Math.max(0,score-5);
+
+      bombFlash = 18;
+
+      miss++;
+
+      missEl.textContent = miss;
+
+    } else {
+
+      score++;
+    }
+
+    scoreEl.textContent = score;
+  }
+}
+
+function pointerEnd() {
+  down = false;
+}
+
+canvas.addEventListener("pointerdown",pointerStart);
+canvas.addEventListener("pointermove",pointerMove);
+canvas.addEventListener("pointerup",pointerEnd);
+canvas.addEventListener("pointercancel",pointerEnd);
+
+// UPDATE GAME
+
+function update(dt) {
+
+  const step = Math.min(dt/16.67,2);
+
+  // Spawn speed increases with score
+
+  const interval = Math.max(250,650-score*5);
+
+  if(performance.now()-lastSpawn > interval) {
+
+    spawn();
+
+    if(Math.random()<.62) spawn();
+
+    if(score>12 && Math.random()<.45) spawn();
+
+    lastSpawn = performance.now();
+  }
+
+  // Move fruits
+
+  for(const it of items) {
+
+    if(it.cut) continue;
+
+    it.x += it.vx*step;
+    it.y += it.vy*step;
+
+    it.vy += it.g*step;
+
+    if(it.y>H+it.r && !it.bomb && !it.missed) {
+
+      it.missed = true;
+
+      miss++;
+
+      missEl.textContent = miss;
+    }
+  }
+
+  items = items.filter(it =>
+    !it.cut && it.y<H+it.r+30
+  );
+
+  // Particles
+
+  for(const p of particles) {
+
+    p.x += p.vx*step;
+    p.y += p.vy*step;
+
+    p.vy += .15*step;
+
+    p.life -= step;
+  }
+
+  particles = particles.filter(p => p.life>0);
+
+  trail = trail.filter(p =>
+    performance.now()-p.t<125
+  );
+
+  if(bombFlash>0) bombFlash-=step;
+
+  if(miss>=3) gameOver();
+}
+
+// DRAW GAME
+
+function draw() {
+
+  background();
+
+  // Fruits and bombs
+
+  for(const it of items) {
+
+    ctx.save();
+
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+
+    ctx.font =
+      `${it.r*1.85}px "Apple Color Emoji","Segoe UI Emoji",sans-serif`;
+
+    ctx.shadowColor = it.bomb ? "#ff3030" : "#000";
+    ctx.shadowBlur = it.bomb ? 20 : 10;
+
+    ctx.fillText(it.emoji,it.x,it.y);
+
+    ctx.restore();
+  }
+
+  // Particles
+
+  for(const p of particles) {
+
+    ctx.globalAlpha = Math.max(0,p.life/40);
+
+    ctx.fillStyle = p.color;
+
+    ctx.beginPath();
+
+    ctx.arc(p.x,p.y,p.size,0,Math.PI*2);
+
+    ctx.fill();
+  }
+
+  ctx.globalAlpha = 1;
+
+  // Sword trail effect
+
+  if(trail.length>1) {
+
+    ctx.save();
+
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+
+    for(let i=1;i<trail.length;i++) {
+
+      let a = i/trail.length;
+
+      ctx.strokeStyle =
+        `rgba(150,235,255,${a*.95})`;
+
+      ctx.lineWidth = 2+a*8;
+
+      ctx.shadowColor = "#79eaff";
+      ctx.shadowBlur = 18;
+
+      ctx.beginPath();
+
+      ctx.moveTo(trail[i-1].x,trail[i-1].y);
+
+      ctx.lineTo(trail[i].x,trail[i].y);
+
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
+  // Bomb flash
+
+  if(bombFlash>0) {
+
+    ctx.fillStyle =
+      `rgba(255,0,0,${Math.min(.22,bombFlash/70)})`;
+
+    ctx.fillRect(0,0,W,H);
+  }
+}
+
+// GAME LOOP
+
+function loop(now) {
+
+  if(!running) return;
+
+  const dt = now-(lastTime||now);
+
+  lastTime = now;
+
+  update(dt);
+  draw();
+
+  if(running) {
+    animation = requestAnimationFrame(loop);
+  }
+}
+
+// START GAME
+
+function startGame() {
+
+  cancelAnimationFrame(animation);
+
+  items = [];
+  particles = [];
+  trail = [];
+
+  score = 0;
+  miss = 0;
+
+  bombFlash = 0;
+  down = false;
+
+  scoreEl.textContent = 0;
+  missEl.textContent = 0;
+
+  lastSpawn = performance.now();
+  lastTime = 0;
+
+  overlay.style.display = "none";
+
+  running = true;
+
+  animation = requestAnimationFrame(loop);
+}
+
+// GAME OVER
+
+function gameOver() {
+
+  running = false;
+
+  cancelAnimationFrame(animation);
+
+  if(score>best) {
+
+    best = score;
+
+    bestEl.textContent = best;
+
+    localStorage.setItem("moonFruitBest",best);
+  }
+
+  heading.textContent = "GAME OVER!";
+
+  message.textContent =
+    `Final Score: ${score} • Best Score: ${best}. Can you beat it?`;
+
+  startBtn.textContent = "TRY AGAIN";
+
+  overlay.style.display = "grid";
+}
+
+startBtn.addEventListener("click",startGame);
+
+draw();
+
+</script>
+</body>
+</html>
